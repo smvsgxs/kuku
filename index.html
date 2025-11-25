@@ -1,0 +1,396 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Star, Trophy, Lock, Unlock, Crown, Zap, Settings, X, ChevronRight, RefreshCcw } from 'lucide-react';
+
+// --- データ定義 ---
+
+// 称号リスト
+const TITLES = [
+  { level: 1, text: "はじまりの冒険者" },
+  { level: 3, text: "かけ算のたまご" },
+  { level: 5, text: "さんすう見習い" },
+  { level: 10, text: "九九の戦士" },
+  { level: 15, text: "計算の達人" },
+  { level: 20, text: "マスターオブ九九" },
+  { level: 30, text: "伝説の計算王" },
+];
+
+// テーマ（スキン）リスト
+const THEMES = [
+  { id: 'default', name: 'いつもの広場', minLevel: 1, bg: 'bg-blue-50', primary: 'bg-blue-500', secondary: 'bg-white', text: 'text-blue-900', accent: 'text-blue-500' },
+  { id: 'forest', name: '迷いの森', minLevel: 3, bg: 'bg-green-100', primary: 'bg-green-600', secondary: 'bg-green-50', text: 'text-green-900', accent: 'text-green-600' },
+  { id: 'space', name: '銀河ステーション', minLevel: 10, bg: 'bg-slate-900', primary: 'bg-indigo-600', secondary: 'bg-slate-800', text: 'text-white', accent: 'text-yellow-400' },
+  { id: 'gold', name: '黄金の神殿', minLevel: 20, bg: 'bg-yellow-100', primary: 'bg-yellow-500', secondary: 'bg-yellow-50', text: 'text-yellow-900', accent: 'text-yellow-600' },
+];
+
+// 相棒（ペット）の進化リスト（絵文字を使用）
+const BUDDIES = [
+  { minLevel: 1, icon: "🥚", name: "タマゴ" },
+  { minLevel: 3, icon: "🐣", name: "ヒヨコ" },
+  { minLevel: 7, icon: "🐥", name: "元気なヒヨコ" },
+  { minLevel: 12, icon: "🐓", name: "ニワトリ" },
+  { minLevel: 18, icon: "🦉", name: "知恵のフクロウ" },
+  { minLevel: 25, icon: "🦅", name: "大空のワシ" },
+  { minLevel: 35, icon: "🐉", name: "伝説のドラゴン" },
+];
+
+// --- ユーティリティ関数 ---
+
+// レベルアップに必要な経験値を計算
+const getNextLevelExp = (level) => {
+  return Math.floor(100 * Math.pow(1.1, level - 1));
+};
+
+// 現在のレベルに応じた称号を取得
+const getCurrentTitle = (level) => {
+  const unlocked = TITLES.filter(t => t.level <= level);
+  return unlocked[unlocked.length - 1].text;
+};
+
+// 現在のレベルに応じた相棒を取得
+const getCurrentBuddy = (level) => {
+  const unlocked = BUDDIES.filter(b => b.minLevel <= level);
+  return unlocked[unlocked.length - 1];
+};
+
+// --- メインコンポーネント ---
+
+export default function KukuQuest() {
+  // ゲーム状態
+  const [gameState, setGameState] = useState('menu'); // menu, playing, themes
+  const [problem, setProblem] = useState({ num1: 1, num2: 1 });
+  const [userAnswer, setUserAnswer] = useState('');
+  const [message, setMessage] = useState(null); // 'correct', 'wrong', 'levelup', etc.
+  
+  // プレイヤーデータ（本来はローカルストレージに保存推奨）
+  const [level, setLevel] = useState(1);
+  const [exp, setExp] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [totalCorrect, setTotalCorrect] = useState(0);
+  const [currentThemeId, setCurrentThemeId] = useState('default');
+
+  // エフェクト用
+  const [shake, setShake] = useState(false);
+  const [confetti, setConfetti] = useState(false);
+  const inputRef = useRef(null);
+
+  // テーマの取得
+  const theme = THEMES.find(t => t.id === currentThemeId) || THEMES[0];
+  const maxExp = getNextLevelExp(level);
+  const progress = Math.min(100, (exp / maxExp) * 100);
+  const buddy = getCurrentBuddy(level);
+
+  // 問題生成
+  const generateProblem = () => {
+    const n1 = Math.floor(Math.random() * 9) + 1;
+    const n2 = Math.floor(Math.random() * 9) + 1;
+    setProblem({ num1: n1, num2: n2 });
+    setUserAnswer('');
+  };
+
+  // 初回ロード時
+  useEffect(() => {
+    generateProblem();
+  }, []);
+
+  // 回答チェック
+  const checkAnswer = () => {
+    const correctAnswer = problem.num1 * problem.num2;
+    const inputVal = parseInt(userAnswer);
+
+    if (isNaN(inputVal)) return;
+
+    if (inputVal === correctAnswer) {
+      handleCorrect();
+    } else {
+      handleWrong();
+    }
+  };
+
+  // 正解時の処理
+  const handleCorrect = () => {
+    const isComboMatch = (combo + 1) % 5 === 0;
+    let gainedExp = 10 + Math.floor(combo / 5) * 5; // コンボボーナス（基本）
+    
+    if (isComboMatch) {
+      gainedExp += 50; // 5連続ボーナス
+      triggerConfetti();
+      setMessage({ type: 'combo', text: '5連続正解！フィーバー！' });
+    } else {
+      setMessage({ type: 'correct', text: 'せいかい！' });
+    }
+
+    setCombo(prev => prev + 1);
+    setTotalCorrect(prev => prev + 1);
+    
+    // 経験値加算とレベルアップチェック
+    let newExp = exp + gainedExp;
+    let newLevel = level;
+    
+    // レベルアップループ（一度に複数上がる可能性も考慮）
+    while (newExp >= getNextLevelExp(newLevel)) {
+      newExp -= getNextLevelExp(newLevel);
+      newLevel++;
+      setMessage({ type: 'levelup', text: `レベルアップ！ Lv.${newLevel}` });
+      triggerConfetti();
+    }
+
+    setExp(newExp);
+    setLevel(newLevel);
+
+    setTimeout(() => {
+      setMessage(null);
+      generateProblem();
+    }, 1200);
+  };
+
+  // 不正解時の処理
+  const handleWrong = () => {
+    setCombo(0);
+    setShake(true);
+    setMessage({ type: 'wrong', text: `ざんねん... 答えは ${problem.num1 * problem.num2}` });
+    setTimeout(() => setShake(false), 500);
+    setTimeout(() => {
+      setMessage(null);
+      setUserAnswer(''); // 答えを消す
+    }, 2000);
+  };
+
+  // 数字入力ハンドラ
+  const handleNumClick = (num) => {
+    if (userAnswer.length >= 2) return;
+    setUserAnswer(prev => prev + num);
+  };
+
+  const handleBackspace = () => {
+    setUserAnswer(prev => prev.slice(0, -1));
+  };
+
+  const handleClear = () => {
+    setUserAnswer('');
+  };
+
+  // 紙吹雪エフェクト（簡易版）
+  const triggerConfetti = () => {
+    setConfetti(true);
+    setTimeout(() => setConfetti(false), 3000);
+  };
+
+  // --- UIコンポーネント ---
+
+  // 1. メニュー画面
+  if (gameState === 'menu') {
+    return (
+      <div className={`min-h-screen ${theme.bg} ${theme.text} flex flex-col items-center justify-center p-4 transition-colors duration-500`}>
+        <div className="bg-white/80 p-8 rounded-3xl shadow-xl text-center max-w-md w-full backdrop-blur-sm">
+          <div className="text-6xl mb-4 animate-bounce">{buddy.icon}</div>
+          <h1 className="text-4xl font-bold mb-2 tracking-tight text-blue-600">九九クエスト</h1>
+          <p className="text-lg text-gray-600 mb-6">めざせ！計算の王様</p>
+          
+          <div className="space-y-4">
+             <div className="bg-white p-4 rounded-xl border-2 border-blue-100">
+               <div className="text-sm text-gray-500">現在のレベル</div>
+               <div className="text-3xl font-bold text-blue-600">Lv.{level}</div>
+               <div className="text-sm font-bold text-orange-500 mt-1">{getCurrentTitle(level)}</div>
+             </div>
+
+             <button 
+               onClick={() => setGameState('playing')}
+               className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-2xl shadow-lg transform transition active:scale-95 text-xl flex items-center justify-center gap-2"
+             >
+               <Zap size={24} fill="currentColor" />
+               冒険に出る
+             </button>
+
+             <button 
+               onClick={() => setGameState('themes')}
+               className="w-full bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-6 rounded-2xl shadow-md transform transition active:scale-95 flex items-center justify-center gap-2"
+             >
+               <Settings size={20} />
+               きせかえ・設定
+             </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. テーマ選択画面
+  if (gameState === 'themes') {
+    return (
+      <div className={`min-h-screen ${theme.bg} flex flex-col items-center p-4`}>
+        <div className="w-full max-w-md">
+          <button onClick={() => setGameState('menu')} className="mb-4 bg-white/50 p-2 rounded-full hover:bg-white/80 transition">
+            <X size={24} className={theme.text} />
+          </button>
+          <h2 className={`text-2xl font-bold mb-6 ${theme.text} text-center`}>テーマをえらぼう</h2>
+          
+          <div className="grid gap-4">
+            {THEMES.map((t) => {
+              const isLocked = level < t.minLevel;
+              const isSelected = currentThemeId === t.id;
+              
+              return (
+                <button
+                  key={t.id}
+                  disabled={isLocked}
+                  onClick={() => setCurrentThemeId(t.id)}
+                  className={`
+                    relative p-4 rounded-2xl border-4 transition-all text-left flex items-center gap-4 overflow-hidden
+                    ${isSelected ? 'border-blue-500 shadow-xl scale-105' : 'border-transparent shadow-sm'}
+                    ${isLocked ? 'bg-gray-200 opacity-70' : 'bg-white hover:bg-gray-50'}
+                  `}
+                >
+                  <div className={`w-16 h-16 rounded-xl ${t.primary} flex items-center justify-center text-white text-2xl shadow-inner`}>
+                    {t.id === 'default' && '🏰'}
+                    {t.id === 'forest' && '🌲'}
+                    {t.id === 'space' && '🚀'}
+                    {t.id === 'gold' && '👑'}
+                  </div>
+                  
+                  <div className="flex-1">
+                    <div className="font-bold text-lg text-gray-800">{t.name}</div>
+                    <div className="text-sm text-gray-500">
+                      {isLocked ? `Lv.${t.minLevel}で解放` : '使えるよ！'}
+                    </div>
+                  </div>
+
+                  {isLocked ? <Lock className="text-gray-400" /> : isSelected && <div className="absolute right-0 top-0 bg-blue-500 text-white text-xs px-2 py-1 rounded-bl-lg">選択中</div>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. ゲーム画面
+  return (
+    <div className={`min-h-screen ${theme.bg} ${theme.text} flex flex-col items-center justify-between p-4 overflow-hidden relative transition-colors duration-500`}>
+      
+      {/* エフェクトレイヤー */}
+      {confetti && (
+        <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden z-50">
+          <div className="animate-ping absolute w-full h-full bg-yellow-200/30"></div>
+          <div className="text-6xl animate-bounce">🎊</div>
+        </div>
+      )}
+
+      {/* ヘッダー情報 */}
+      <div className="w-full max-w-md flex justify-between items-center bg-white/60 p-2 rounded-full backdrop-blur-sm">
+        <button onClick={() => setGameState('menu')} className="p-2 rounded-full hover:bg-black/10">
+          <X size={20} />
+        </button>
+        <div className="flex flex-col items-center">
+          <span className="text-xs font-bold opacity-70">Lv.{level} {getCurrentTitle(level)}</span>
+          <div className="w-32 h-3 bg-gray-200 rounded-full overflow-hidden mt-1 border border-black/10">
+            <div 
+              className={`h-full ${theme.primary} transition-all duration-500 ease-out`} 
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1 font-bold text-orange-500 px-3">
+          <Star size={16} fill="currentColor" />
+          <span>{totalCorrect}</span>
+        </div>
+      </div>
+
+      {/* メインエリア */}
+      <div className="flex-1 w-full max-w-md flex flex-col items-center justify-center gap-6 relative">
+        
+        {/* コンボ表示 */}
+        <div className={`h-8 transition-all duration-300 ${combo >= 2 ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>
+          <div className="bg-orange-500 text-white px-4 py-1 rounded-full font-bold shadow-lg animate-pulse flex items-center gap-2">
+            <Zap size={16} fill="currentColor" />
+            {combo} コンボ！
+          </div>
+        </div>
+
+        {/* 相棒と吹き出し */}
+        <div className="relative">
+           <div className={`text-9xl filter drop-shadow-xl transition-transform duration-300 ${shake ? 'translate-x-[-10px]' : ''}`}>
+             {buddy.icon}
+           </div>
+           {/* メッセージバルーン */}
+           {message && (
+             <div className={`
+               absolute -top-12 left-1/2 transform -translate-x-1/2 whitespace-nowrap
+               px-6 py-3 rounded-2xl shadow-xl font-bold text-xl z-20 border-4 border-white
+               animate-bounce
+               ${message.type === 'wrong' ? 'bg-red-500 text-white' : 
+                 message.type === 'levelup' ? 'bg-yellow-400 text-white' : 
+                 message.type === 'combo' ? 'bg-orange-500 text-white' :
+                 'bg-white text-blue-600'}
+             `}>
+               {message.text}
+             </div>
+           )}
+        </div>
+
+        {/* 問題カード */}
+        <div className={`bg-white rounded-3xl p-8 shadow-2xl w-full text-center border-b-8 border-gray-200 relative ${shake ? 'animate-shake' : ''}`}>
+          <div className="text-7xl font-black text-gray-800 tracking-widest flex justify-center items-center gap-4">
+            <span>{problem.num1}</span>
+            <span className="text-4xl text-gray-400">×</span>
+            <span>{problem.num2}</span>
+            <span className="text-4xl text-gray-400">=</span>
+            <span className={`min-w-[80px] border-b-4 ${userAnswer ? 'border-gray-800' : 'border-gray-200'} text-blue-600`}>
+              {userAnswer || '?'}
+            </span>
+          </div>
+        </div>
+
+      </div>
+
+      {/* テンキー */}
+      <div className="w-full max-w-md bg-white/40 p-4 rounded-3xl backdrop-blur-md">
+        <div className="grid grid-cols-3 gap-3">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((num) => (
+            <button
+              key={num}
+              onClick={() => handleNumClick(num.toString())}
+              className={`
+                bg-white shadow-[0_4px_0_0_rgba(0,0,0,0.1)] active:shadow-none active:translate-y-[4px]
+                h-16 rounded-2xl text-3xl font-bold ${theme.text} hover:bg-gray-50 transition-all
+                ${num === 0 ? 'col-span-1' : ''}
+              `}
+            >
+              {num}
+            </button>
+          ))}
+          
+          <button
+            onClick={handleBackspace}
+            className="bg-gray-200 h-16 rounded-2xl text-xl font-bold text-gray-600 flex items-center justify-center shadow-[0_4px_0_0_rgba(0,0,0,0.1)] active:translate-y-[4px] active:shadow-none"
+          >
+            けす
+          </button>
+          
+          <button
+            onClick={checkAnswer}
+            disabled={userAnswer === ''}
+            className={`
+              h-16 rounded-2xl text-xl font-bold text-white flex items-center justify-center shadow-[0_4px_0_0_rgba(0,0,0,0.2)]
+              transition-all
+              ${userAnswer === '' ? 'bg-gray-300 cursor-not-allowed' : `${theme.primary} active:translate-y-[4px] active:shadow-none`}
+            `}
+          >
+            決定
+          </button>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-8px); }
+          75% { transform: translateX(8px); }
+        }
+        .animate-shake {
+          animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both;
+        }
+      `}</style>
+    </div>
+  );
+}
