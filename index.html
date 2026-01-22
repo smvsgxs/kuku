@@ -1,932 +1,299 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>九九クエスト</title>
-  <!-- Tailwind CSS (デザイン用) -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- React & ReactDOM (プログラムの心臓部) -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <!-- Babel (コード翻訳機) -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  
-  <style>
-    /* 画面のちらつき防止 & アニメーション定義 */
-    body { touch-action: manipulation; }
-    @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
-    @keyframes bounce-slight { 0%, 100% { transform: translate(-50%, 0); } 50% { transform: translate(-50%, -10px); } }
-    @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes bounceMove { 0%, 100% { transform: translate(-50%, 50%) scale(1); } 50% { transform: translate(-50%, 40%) scale(1.1); } }
+import streamlit as st
+import pandas as pd
+import random
+import datetime
+
+# ページ設定
+st.set_page_config(page_title="AI献立シェフ", layout="wide")
+
+# --- データの初期化（初回起動時のみ実行） ---
+if 'inventory' not in st.session_state:
+    # 初期在庫データ
+    st.session_state.inventory = pd.DataFrame({
+        '食材名': ['豚バラ肉', '鶏もも肉', 'キャベツ', '玉ねぎ', '人参', 'じゃがいも', '卵', '豆腐', 'もやし', 'ひき肉'],
+        '在庫あり': [True, False, True, True, False, False, True, True, False, False],
+        'カテゴリ': ['肉', '肉', '野菜', '野菜', '野菜', '野菜', '卵・大豆', '卵・大豆', '野菜', '肉']
+    })
+
+if 'recipes' not in st.session_state:
+    # 初期レシピデータ（4軸評価付き）
+    st.session_state.recipes = [
+        {
+            "name": "回鍋肉",
+            "ingredients": ["豚バラ肉", "キャベツ", "ピーマン"],
+            "taste": 5,        # 5段階
+            "effort": "普通",  # 楽ちん/普通/手間
+            "cost": "普通",    # 節約/普通/贅沢
+            "frequency": "月2-3回", # 頻度
+            "last_eaten": None
+        },
+        {
+            "name": "肉じゃが",
+            "ingredients": ["豚バラ肉", "じゃがいも", "玉ねぎ", "人参"],
+            "taste": 4,
+            "effort": "手間",
+            "cost": "普通",
+            "frequency": "月1回",
+            "last_eaten": None
+        },
+        {
+            "name": "親子丼",
+            "ingredients": ["鶏もも肉", "卵", "玉ねぎ"],
+            "taste": 5,
+            "effort": "楽ちん",
+            "cost": "節約",
+            "frequency": "週1回以上",
+            "last_eaten": None
+        },
+        {
+            "name": "野菜炒め",
+            "ingredients": ["豚バラ肉", "キャベツ", "もやし", "人参"],
+            "taste": 3,
+            "effort": "楽ちん",
+            "cost": "節約",
+            "frequency": "週1回以上",
+            "last_eaten": None
+        },
+        {
+            "name": "麻婆豆腐",
+            "ingredients": ["ひき肉", "豆腐", "ネギ"],
+            "taste": 4,
+            "effort": "普通",
+            "cost": "節約",
+            "frequency": "月2-3回",
+            "last_eaten": None
+        },
+        {
+            "name": "チキンソテー",
+            "ingredients": ["鶏もも肉", "ブロッコリー"],
+            "taste": 5,
+            "effort": "普通",
+            "cost": "普通",
+            "frequency": "月2-3回",
+            "last_eaten": None
+        },
+        {
+            "name": "豚平焼き",
+            "ingredients": ["豚バラ肉", "卵", "キャベツ"],
+            "taste": 4,
+            "effort": "楽ちん",
+            "cost": "節約",
+            "frequency": "週1回以上",
+            "last_eaten": None
+        }
+    ]
+
+if 'weekly_menu' not in st.session_state:
+    st.session_state.weekly_menu = {}
+
+# --- 関数定義 ---
+
+def get_inventory_list():
+    """在庫ありの食材リストを返す"""
+    df = st.session_state.inventory
+    return df[df['在庫あり']]['食材名'].tolist()
+
+def calculate_score(recipe, current_inventory, is_weekend):
+    """レシピの推奨スコアを計算するロジック"""
+    score = 0
     
-    .animate-shake { animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both; }
-    .animate-bounce-slight { animation: bounce-slight 2s infinite; }
-    .animate-fade-in-up { animation: fadeInUp 0.5s ease-out; }
-  </style>
-</head>
-<body class="bg-gray-100">
-  <div id="root"></div>
-
-  <script type="text/babel">
-    const { useState, useEffect, useRef } = React;
-
-    // --- アイコンコンポーネント (Lucideの代わり) ---
-    // Reactで直接使えるようにSVGを定義します
-    const IconBase = ({ children, size = 24, className = "" }) => (
-      <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>{children}</svg>
-    );
-
-    const Star = (p) => <IconBase {...p}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></IconBase>;
-    const Trophy = (p) => <IconBase {...p}><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"></path><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"></path><path d="M4 22h16"></path><path d="M9 22a10 10 0 0 1 10-10A10 10 0 0 1 12 2 10 10 0 0 1 4 12a10 10 0 0 1 5 10Z"></path></IconBase>;
-    const Lock = (p) => <IconBase {...p}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></IconBase>;
-    const Unlock = (p) => <IconBase {...p}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></IconBase>;
-    const Crown = (p) => <IconBase {...p}><path d="m2 4 3 12h14l3-12-6 7-4-3-4 3-6-7z"></path></IconBase>;
-    const Zap = (p) => <IconBase {...p}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></IconBase>;
-    const Settings = (p) => <IconBase {...p}><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.47a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.39a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></IconBase>;
-    const X = (p) => <IconBase {...p}><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></IconBase>;
-    const ChevronRight = (p) => <IconBase {...p}><polyline points="9 18 15 12 9 6"></polyline></IconBase>;
-    const RefreshCcw = (p) => <IconBase {...p}><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"></path><path d="M16 16h5v5"></path></IconBase>;
-    const LogOut = (p) => <IconBase {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></IconBase>;
-    const BarChart3 = (p) => <IconBase {...p}><path d="M3 3v18h18"></path><path d="M18 17V9"></path><path d="M13 17V5"></path><path d="M8 17v-3"></path></IconBase>;
-    const ArrowUpCircle = (p) => <IconBase {...p}><circle cx="12" cy="12" r="10"></circle><path d="m16 12-4-4-4 4"></path><path d="M12 16V8"></path></IconBase>;
-    const Flag = (p) => <IconBase {...p}><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" y1="22" x2="4" y2="15"></line></IconBase>;
-    const Skull = (p) => <IconBase {...p}><circle cx="9" cy="12" r="1"></circle><circle cx="15" cy="12" r="1"></circle><path d="M8 20v2h8v-2"></path><path d="m12.5 17-.5-1-.5 1h1z"></path><path d="M16 20a2 2 0 0 0 1.56-3.25 8 8 0 1 0-11.12 0A2 2 0 0 0 8 20"></path></IconBase>;
-    const Egg = (p) => <IconBase {...p}><path d="M12 22c6.23-.05 7.87-5.57 7.5-10-.36-4.34-3.95-9.96-7.5-10s-7.14 5.66-7.5 10c-.37 4.43 1.27 9.95 7.5 10z"></path></IconBase>;
-    const Calendar = (p) => <IconBase {...p}><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></IconBase>;
-    const User = (p) => <IconBase {...p}><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></IconBase>;
-    const Plus = (p) => <IconBase {...p}><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></IconBase>;
-    const CheckCircle = (p) => <IconBase {...p}><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></IconBase>;
-    const Clock = (p) => <IconBase {...p}><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></IconBase>;
-
-    // --- 定数定義 ---
-
-    // 1日の目標時間（秒） - デテスト用に短くしたい場合はここを変更（例: 10秒なら10）
-    // 本番設定: 10分 = 600秒
-    const DAILY_GOAL_SECONDS = 600; 
-
-    // 最大レベル（山頂）
-    const MAX_LEVEL = 30;
-
-    // 称号リスト
-    const TITLES = [
-      { level: 1, text: "はじまりの冒険者" },
-      { level: 3, text: "かけ算のたまご" },
-      { level: 5, text: "さんすう見習い" },
-      { level: 10, text: "九九の戦士" },
-      { level: 15, text: "計算の達人" },
-      { level: 20, text: "マスターオブ九九" },
-      { level: 30, text: "伝説の計算王" },
-    ];
-
-    // テーマ（スキン）リスト
-    const THEMES = [
-      { id: 'default', name: 'いつもの広場', minLevel: 1, bg: 'bg-blue-50', primary: 'bg-blue-500', secondary: 'bg-white', text: 'text-blue-900', accent: 'text-blue-500' },
-      { id: 'forest', name: '迷いの森', minLevel: 3, bg: 'bg-green-100', primary: 'bg-green-600', secondary: 'bg-green-50', text: 'text-green-900', accent: 'text-green-600' },
-      { id: 'space', name: '銀河ステーション', minLevel: 10, bg: 'bg-slate-900', primary: 'bg-indigo-600', secondary: 'bg-slate-800', text: 'text-white', accent: 'text-yellow-400' },
-      { id: 'gold', name: '黄金の神殿', minLevel: 20, bg: 'bg-yellow-100', primary: 'bg-yellow-500', secondary: 'bg-yellow-50', text: 'text-yellow-900', accent: 'text-yellow-600' },
-    ];
-
-    // 相棒（ペット）の進化リスト
-    const BUDDY_TYPES = {
-      sky: {
-        id: 'sky',
-        name: 'そらのタマゴ',
-        color: 'bg-sky-100 border-sky-300',
-        evolutions: [
-          { minLevel: 1, icon: "🥚", name: "タマゴ" },
-          { minLevel: 3, icon: "🐣", name: "ヒヨコ" },
-          { minLevel: 7, icon: "🐓", name: "ニワトリ" },
-          { minLevel: 12, icon: "🦉", name: "フクロウ" },
-          { minLevel: 18, icon: "🦅", name: "オオワシ" },
-          { minLevel: 25, icon: "🦚", name: "ホウオウ" },
-          { minLevel: 30, icon: "🐉", name: "ドラゴン" },
-        ]
-      },
-      land: {
-        id: 'land',
-        name: 'りくのタマゴ',
-        color: 'bg-orange-100 border-orange-300',
-        evolutions: [
-          { minLevel: 1, icon: "🥚", name: "タマゴ" },
-          { minLevel: 3, icon: "🐶", name: "コイヌ" },
-          { minLevel: 7, icon: "🐕", name: "シバイヌ" },
-          { minLevel: 12, icon: "🐺", name: "オオカミ" },
-          { minLevel: 18, icon: "🐅", name: "トラ" },
-          { minLevel: 25, icon: "🦁", name: "ライオン" },
-          { minLevel: 30, icon: "🦄", name: "ユニコーン" },
-        ]
-      },
-      sea: {
-        id: 'sea',
-        name: 'うみのタマゴ',
-        color: 'bg-blue-100 border-blue-300',
-        evolutions: [
-          { minLevel: 1, icon: "🥚", name: "タマゴ" },
-          { minLevel: 3, icon: "🐸", name: "カエル" },
-          { minLevel: 7, icon: "🐢", name: "カメ" },
-          { minLevel: 12, icon: "🐬", name: "イルカ" },
-          { minLevel: 18, icon: "🦈", name: "サメ" },
-          { minLevel: 25, icon: "🐋", name: "クジラ" },
-          { minLevel: 30, icon: "🐙", name: "クラーケン" },
-        ]
-      }
-    };
-
-    // 敵モンスターリスト
-    const ENEMIES = {
-      1: [
-        { icon: "🐌", name: "かたつむり" },
-        { icon: "🐛", name: "けむし" },
-        { icon: "🐭", name: "ねずみ" },
-        { icon: "🍄", name: "おばけキノコ" },
-        { icon: "💧", name: "スライム" }
-      ],
-      2: [
-        { icon: "🦇", name: "こうもり" },
-        { icon: "🐍", name: "ヘビ" },
-        { icon: "🐺", name: "オオカミ" },
-        { icon: "👻", name: "ゴースト" },
-        { icon: "🐗", name: "イノシシ" }
-      ],
-      3: [
-        { icon: "🦍", name: "ゴリラ" },
-        { icon: "🐅", name: "トラ" },
-        { icon: "🦁", name: "ライオン" },
-        { icon: "👿", name: "デーモン" },
-        { icon: "🦖", name: "ティラノ" }
-      ]
-    };
-
-    const ENCOURAGEMENTS = [
-      "おしい！つぎはできるよ！",
-      "ドンマイ！しっぱいはいこうのもと！",
-      "あきらめないで！そのちょうし！",
-      "まちがえてもおぼえればOK！",
-      "だいじょうぶ！つぎ、がんばろう！",
-      "ミスはせいちょうのチャンス！",
-      "ゆっくりかんがえてみよう！",
-      "あとすこし！きみならできる！",
-      "なやんだぶんだけ、つよくなる！",
-      "しんこきゅうして、もういちど！"
-    ];
-
-    // --- ユーティリティ関数 ---
-
-    const getNextLevelExp = (level) => Math.floor(100 * Math.pow(1.1, level - 1));
-
-    const getCurrentTitle = (level) => {
-      const unlocked = TITLES.filter(t => t.level <= level);
-      return unlocked[unlocked.length - 1].text;
-    };
-
-    const getCurrentBuddy = (level, typeId) => {
-      const type = BUDDY_TYPES[typeId] || BUDDY_TYPES.sky;
-      const unlocked = type.evolutions.filter(b => b.minLevel <= level);
-      return unlocked[unlocked.length - 1];
-    };
-
-    const getDifficulty = (n1, n2) => {
-      const isHard = (n) => [6, 7, 8, 9].includes(n);
-      const isEasy = (n) => [1, 2, 5].includes(n);
-      if (isHard(n1) && isHard(n2)) return 3;
-      if (isEasy(n1) || isEasy(n2)) return 1;
-      return 2;
-    };
-
-    const getExpByDifficulty = (difficulty) => {
-      switch (difficulty) {
-        case 3: return 40;
-        case 2: return 25;
-        case 1: return 15;
-        default: return 10;
-      }
-    };
-
-    const getMountainPos = (lvl) => {
-      const progress = Math.min(Math.max(lvl - 1, 0), MAX_LEVEL) / MAX_LEVEL;
-      const x = 10 + (75 * progress);
-      const curve = Math.sin(progress * Math.PI * 2) * 5; 
-      const y = 15 + (70 * progress) + curve;
-      return { left: x, bottom: y };
-    };
-
-    const getTodayString = () => {
-      return new Date().toISOString().split('T')[0];
-    };
-
-    // ローカルストレージ操作用キー
-    const STORAGE_KEY = 'kuku_quest_users';
-
-    // --- メインコンポーネント ---
-
-    function KukuQuest() {
-      // ゲームの状態遷移: user_select -> egg_select (new user) -> menu -> playing -> themes/calendar/summary
-      const [gameState, setGameState] = useState('user_select');
-      
-      // ユーザーデータ管理
-      const [users, setUsers] = useState([]);
-      const [currentUser, setCurrentUser] = useState(null);
-      const [newUserName, setNewUserName] = useState('');
-
-      // ゲームプレイ状態
-      const [problem, setProblem] = useState({ num1: 1, num2: 1, difficulty: 1 });
-      const [currentEnemy, setCurrentEnemy] = useState(ENEMIES[1][0]);
-      const [userAnswer, setUserAnswer] = useState('');
-      const [message, setMessage] = useState(null); 
-      const [combo, setCombo] = useState(0);
-      const [totalCorrect, setTotalCorrect] = useState(0); // そのセッションの正解数
-      const [turnCount, setTurnCount] = useState(1); 
-      const [retryQueue, setRetryQueue] = useState([]); 
-      const [mistakeHistory, setMistakeHistory] = useState([]); 
-
-      // タイマー・カレンダー関連
-      const [dailyPlaySeconds, setDailyPlaySeconds] = useState(0);
-      const [showDailyGoalModal, setShowDailyGoalModal] = useState(false);
-      const timerRef = useRef(null);
-
-      // エフェクト用
-      const [shake, setShake] = useState(false);
-      const [confetti, setConfetti] = useState(false);
-      const [showLevelUpAnim, setShowLevelUpAnim] = useState(false);
-      const [charPos, setCharPos] = useState({ left: 10, bottom: 15 });
-
-      // 初期ロード：ローカルストレージからユーザー読み込み
-      useEffect(() => {
-        const savedUsers = localStorage.getItem(STORAGE_KEY);
-        if (savedUsers) {
-          setUsers(JSON.parse(savedUsers));
-        }
-      }, []);
-
-      // ユーザーデータ保存
-      const saveUserData = (updatedUser) => {
-        const updatedUsers = users.map(u => u.id === updatedUser.id ? updatedUser : u);
-        setUsers(updatedUsers);
-        setCurrentUser(updatedUser);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedUsers));
-      };
-
-      // タイマー処理
-      useEffect(() => {
-        if (gameState === 'playing' && !showLevelUpAnim && !showDailyGoalModal) {
-          timerRef.current = setInterval(() => {
-            setDailyPlaySeconds(prev => {
-              const nextVal = prev + 1;
-              
-              // 目標達成チェック
-              if (nextVal === DAILY_GOAL_SECONDS) {
-                handleDailyGoalReached();
-              }
-              return nextVal;
-            });
-          }, 1000);
-        } else {
-          clearInterval(timerRef.current);
-        }
-        return () => clearInterval(timerRef.current);
-      }, [gameState, showLevelUpAnim, showDailyGoalModal]);
-
-      // 目標達成時の処理
-      const handleDailyGoalReached = () => {
-        const today = getTodayString();
-        
-        // まだ今日のスタンプがない場合のみ追加
-        if (!currentUser.stampedDates.includes(today)) {
-          const updatedUser = {
-            ...currentUser,
-            stampedDates: [...currentUser.stampedDates, today]
-          };
-          saveUserData(updatedUser);
-        }
-        
-        // お祝いモーダル表示
-        setShowDailyGoalModal(true);
-        triggerConfetti();
-      };
-
-      // ユーザー作成・選択処理
-      const createNewUser = (buddyTypeId) => {
-        const newUser = {
-          id: Date.now().toString(),
-          name: newUserName || '冒険者',
-          level: 1,
-          exp: 0,
-          buddyType: buddyTypeId,
-          currentThemeId: 'default',
-          stampedDates: [], // カレンダー用スタンプ履歴
-          playTimeHistory: {} // 日毎のプレイ時間（拡張用）
-        };
-        
-        const newUsers = [...users, newUser];
-        setUsers(newUsers);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newUsers));
-        
-        setCurrentUser(newUser);
-        setDailyPlaySeconds(0);
-        setGameState('menu');
-      };
-
-      const loginUser = (user) => {
-        setCurrentUser(user);
-        setDailyPlaySeconds(0); // セッションタイマーはリセット（本来は当日の累積などを計算するが今回はシンプルに）
-        setGameState('menu');
-      };
-
-      // 派生データ
-      const theme = THEMES.find(t => t.id === (currentUser?.currentThemeId || 'default')) || THEMES[0];
-      const buddy = currentUser ? getCurrentBuddy(currentUser.level, currentUser.buddyType) : BUDDY_TYPES.sky.evolutions[0];
-      const maxExp = currentUser ? getNextLevelExp(currentUser.level) : 100;
-      const progress = currentUser ? Math.min(100, (currentUser.exp / maxExp) * 100) : 0;
-
-      // 問題生成
-      const generateProblem = (currentTurn) => {
-        let nextProblem = {};
-        const retryIndex = retryQueue.findIndex(item => item.targetTurn <= currentTurn);
-        if (retryIndex !== -1) {
-          const retryItem = retryQueue[retryIndex];
-          nextProblem = { num1: retryItem.num1, num2: retryItem.num2 };
-          const newQueue = [...retryQueue];
-          newQueue.splice(retryIndex, 1);
-          setRetryQueue(newQueue);
-        } else {
-          const n1 = Math.floor(Math.random() * 9) + 1;
-          const n2 = Math.floor(Math.random() * 9) + 1;
-          nextProblem = { num1: n1, num2: n2 };
-        }
-
-        const diff = getDifficulty(nextProblem.num1, nextProblem.num2);
-        const enemyList = ENEMIES[diff];
-        const enemy = enemyList[Math.floor(Math.random() * enemyList.length)];
-
-        setProblem({ ...nextProblem, difficulty: diff });
-        setCurrentEnemy(enemy);
-        setUserAnswer('');
-      };
-
-      const startGame = () => {
-        setTurnCount(1);
-        setRetryQueue([]);
-        setMistakeHistory([]);
-        setCombo(0);
-        setTotalCorrect(0);
-        setGameState('playing');
-        generateProblem(1);
-      };
-
-      const checkAnswer = () => {
-        const correctAnswer = problem.num1 * problem.num2;
-        const inputVal = parseInt(userAnswer);
-        if (isNaN(inputVal)) return;
-
-        if (inputVal === correctAnswer) {
-          handleCorrect();
-        } else {
-          handleWrong();
-        }
-      };
-
-      const handleCorrect = () => {
-        const isComboMatch = (combo + 1) % 5 === 0;
-        const baseExp = getExpByDifficulty(problem.difficulty);
-        let gainedExp = baseExp + Math.floor(combo / 5) * 5; 
-        
-        if (isComboMatch) {
-          gainedExp += 50; 
-          triggerConfetti();
-          setMessage({ type: 'combo', text: `5連続正解！フィーバー！ (+${gainedExp} exp)` });
-        } else {
-          setMessage({ type: 'correct', text: `${currentEnemy.name}をたおした！ (+${gainedExp} exp)` });
-        }
-
-        setCombo(prev => prev + 1);
-        setTotalCorrect(prev => prev + 1);
-        
-        // ユーザーデータ更新（経験値・レベル）
-        let newExp = currentUser.exp + gainedExp;
-        let newLevel = currentUser.level;
-        let isLevelUp = false;
-
-        while (newExp >= getNextLevelExp(newLevel)) {
-          newExp -= getNextLevelExp(newLevel);
-          newLevel++;
-          isLevelUp = true;
-        }
-
-        const updatedUser = { ...currentUser, level: newLevel, exp: newExp };
-        saveUserData(updatedUser); // 即時保存
-
-        if (isLevelUp) {
-          setTimeout(() => {
-            setMessage(null);
-            setShowLevelUpAnim(true);
-          }, 800);
-        } else {
-          setTimeout(() => {
-            setMessage(null);
-            const nextTurn = turnCount + 1;
-            setTurnCount(nextTurn);
-            generateProblem(nextTurn);
-          }, 1200);
-        }
-      };
-
-      const handleWrong = () => {
-        const correctAnswer = problem.num1 * problem.num2;
-        const randomEncouragement = ENCOURAGEMENTS[Math.floor(Math.random() * ENCOURAGEMENTS.length)];
-
-        setMistakeHistory(prev => [...prev, { num1: problem.num1, num2: problem.num2 }]);
-        setRetryQueue(prev => [...prev, { 
-          num1: problem.num1, 
-          num2: problem.num2, 
-          targetTurn: turnCount + 3 
-        }]);
-
-        setCombo(0);
-        setShake(true);
-        setMessage({ type: 'wrong', text: `${randomEncouragement} 答えは ${correctAnswer}` });
-        
-        setTimeout(() => setShake(false), 500);
-        setTimeout(() => {
-          setMessage(null);
-          const nextTurn = turnCount + 1;
-          setTurnCount(nextTurn);
-          generateProblem(nextTurn);
-        }, 3000);
-      };
-
-      const handleNumClick = (num) => {
-        if (userAnswer.length >= 2) return;
-        setUserAnswer(prev => prev + num);
-      };
-      const handleBackspace = () => setUserAnswer(prev => prev.slice(0, -1));
-
-      const triggerConfetti = () => {
-        setConfetti(true);
-        setTimeout(() => setConfetti(false), 3000);
-      };
-
-      // --- UIコンポーネント: カレンダー ---
-      const CalendarView = () => {
-        const today = new Date();
-        const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
-
-        const daysInMonth = new Date(viewDate.getFullYear(), viewDate.getMonth() + 1, 0).getDate();
-        const firstDay = new Date(viewDate.getFullYear(), viewDate.getMonth(), 1).getDay();
-        
-        const days = [];
-        for (let i = 0; i < firstDay; i++) days.push(null);
-        for (let i = 1; i <= daysInMonth; i++) days.push(i);
-
-        return (
-          <div className={`min-h-screen ${theme.bg} ${theme.text} flex flex-col items-center justify-center p-4`}>
-            <div className="bg-white/90 p-6 rounded-3xl shadow-xl w-full max-w-md backdrop-blur-sm">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold flex items-center gap-2">
-                  <Calendar className="text-blue-500" />
-                  学習カレンダー
-                </h2>
-                <button onClick={() => setGameState('menu')} className="bg-gray-200 p-2 rounded-full hover:bg-gray-300">
-                  <X size={20} />
-                </button>
-              </div>
-
-              <div className="text-center font-bold text-lg mb-4 text-gray-700">
-                {viewDate.getFullYear()}年 {viewDate.getMonth() + 1}月
-              </div>
-
-              <div className="grid grid-cols-7 gap-2 mb-4">
-                {['日', '月', '火', '水', '木', '金', '土'].map(day => (
-                  <div key={day} className="text-center text-xs font-bold text-gray-400">{day}</div>
-                ))}
-                {days.map((day, idx) => {
-                  if (!day) return <div key={idx}></div>;
-                  
-                  // 日付文字列生成 (YYYY-MM-DD)
-                  const dateStr = `${viewDate.getFullYear()}-${String(viewDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                  const isStamped = currentUser.stampedDates.includes(dateStr);
-                  const isToday = dateStr === getTodayString();
-
-                  return (
-                    <div key={idx} className={`aspect-square flex items-center justify-center rounded-lg relative ${isToday ? 'bg-blue-100 border-2 border-blue-300' : 'bg-gray-50'}`}>
-                      <span className="text-gray-600 text-sm">{day}</span>
-                      {isStamped && (
-                        <div className="absolute inset-0 flex items-center justify-center animate-bounce-slight">
-                          <div className="text-3xl opacity-80 filter drop-shadow-sm">💮</div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              <p className="text-center text-sm text-gray-500">
-                1日{Math.floor(DAILY_GOAL_SECONDS / 60)}分べんきょうすると<br/>スタンプがもらえるよ！
-              </p>
-            </div>
-          </div>
-        );
-      };
-
-      // --- UIコンポーネント: ユーザー選択 ---
-      if (gameState === 'user_select') {
-        return (
-          <div className="min-h-screen bg-blue-50 text-blue-900 flex flex-col items-center justify-center p-4">
-            <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md text-center">
-              <h1 className="text-3xl font-bold mb-6 text-blue-600">九九クエスト</h1>
-              <p className="mb-6 font-bold text-gray-600">だれが冒険する？</p>
-
-              <div className="space-y-4 mb-8">
-                {users.map(u => {
-                  const uBuddy = getCurrentBuddy(u.level, u.buddyType);
-                  return (
-                    <button 
-                      key={u.id} 
-                      onClick={() => loginUser(u)}
-                      className="w-full bg-white border-2 border-blue-100 hover:border-blue-400 p-4 rounded-2xl flex items-center gap-4 transition-all hover:shadow-md"
-                    >
-                      <div className="text-4xl bg-blue-50 rounded-full p-2">{uBuddy.icon}</div>
-                      <div className="text-left flex-1">
-                        <div className="font-bold text-lg">{u.name}</div>
-                        <div className="text-sm text-gray-500">Lv.{u.level} - {getCurrentTitle(u.level)}</div>
-                      </div>
-                      <ChevronRight className="text-gray-300" />
-                    </button>
-                  );
-                })}
-
-                <button 
-                  onClick={() => setGameState('create_user')}
-                  className="w-full bg-blue-500 hover:bg-blue-600 text-white p-4 rounded-2xl flex items-center justify-center gap-2 font-bold transition-all"
-                >
-                  <Plus size={20} />
-                  あたらしくつくる
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      // --- UIコンポーネント: ユーザー作成（名前入力） ---
-      if (gameState === 'create_user') {
-        return (
-          <div className="min-h-screen bg-blue-50 text-blue-900 flex flex-col items-center justify-center p-4">
-            <div className="bg-white p-8 rounded-3xl shadow-xl w-full max-w-md text-center">
-              <h2 className="text-2xl font-bold mb-4">なまえをおしえてね</h2>
-              <input 
-                type="text" 
-                value={newUserName}
-                onChange={(e) => setNewUserName(e.target.value)}
-                placeholder="おなまえ"
-                className="w-full text-center text-2xl p-4 border-2 border-gray-200 rounded-2xl mb-6 focus:border-blue-500 outline-none"
-                maxLength={8}
-              />
-              <div className="flex gap-4">
-                <button onClick={() => setGameState('user_select')} className="flex-1 bg-gray-200 hover:bg-gray-300 font-bold py-3 rounded-xl text-gray-600">もどる</button>
-                <button 
-                  onClick={() => {
-                    if(newUserName.trim()) setGameState('egg_select');
-                  }} 
-                  disabled={!newUserName.trim()}
-                  className={`flex-1 font-bold py-3 rounded-xl text-white ${newUserName.trim() ? 'bg-blue-500 hover:bg-blue-600' : 'bg-gray-300'}`}
-                >
-                  次へ
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      // --- UIコンポーネント: タマゴ選択 ---
-      if (gameState === 'egg_select') {
-        return (
-          <div className={`min-h-screen ${theme.bg} ${theme.text} flex flex-col items-center justify-center p-4`}>
-            <div className="bg-white/90 p-8 rounded-3xl shadow-xl text-center max-w-2xl w-full backdrop-blur-sm animate-fade-in-up">
-              <h2 className="text-3xl font-bold mb-2">相棒をえらぼう！</h2>
-              <p className="text-gray-600 mb-8">こんにちは、<span className="text-blue-600 font-bold">{newUserName}</span>！<br/>どのタマゴといっしょに冒険する？</p>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {Object.values(BUDDY_TYPES).map((type) => (
-                  <button 
-                    key={type.id}
-                    onClick={() => createNewUser(type.id)}
-                    className={`
-                      ${type.color} border-4 rounded-3xl p-6 flex flex-col items-center gap-4
-                      transition-all hover:scale-105 hover:shadow-xl active:scale-95 group
-                    `}
-                  >
-                    <div className="text-8xl filter drop-shadow-md group-hover:animate-bounce">
-                      🥚
-                    </div>
-                    <div>
-                      <div className="font-bold text-xl">{type.name}</div>
-                      <div className="text-sm opacity-70 mt-1">
-                        {type.id === 'sky' && 'ヒヨコ → ？？？'}
-                        {type.id === 'land' && 'コイヌ → ？？？'}
-                        {type.id === 'sea' && 'カエル → ？？？'}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-              <button onClick={() => setGameState('create_user')} className="mt-8 text-gray-500 hover:text-gray-700 underline">戻る</button>
-            </div>
-          </div>
-        );
-      }
-
-      // --- UIコンポーネント: カレンダー表示 ---
-      if (gameState === 'calendar') {
-        return <CalendarView />;
-      }
-
-      // --- UIコンポーネント: 登山アニメーション ---
-      if (showLevelUpAnim) {
-        return (
-          <div className="min-h-screen bg-sky-200 flex flex-col items-center justify-between overflow-hidden relative">
-            <div className="absolute inset-0 bg-gradient-to-b from-blue-300 via-blue-100 to-green-100"></div>
-            <div className="absolute top-10 left-10 text-white opacity-80 animate-pulse">☁️</div>
-            <div className="z-10 mt-12 text-center animate-fade-in-up">
-               <div className="text-yellow-500 font-black text-5xl drop-shadow-lg mb-2 flex items-center justify-center gap-2">
-                 <ArrowUpCircle size={48} />
-                 LEVEL UP!
-               </div>
-               <div className="bg-white/80 backdrop-blur-sm px-8 py-4 rounded-3xl shadow-xl inline-block">
-                 <p className="text-gray-600 font-bold">レベル {currentUser.level-1} → <span className="text-blue-600 text-3xl">Lv.{currentUser.level}</span></p>
-                 <p className="text-orange-500 font-bold mt-1">{getCurrentTitle(currentUser.level)}</p>
-               </div>
-            </div>
-            <div className="w-full h-96 relative z-10 mt-auto mb-20">
-              <svg className="absolute bottom-0 w-full h-full" preserveAspectRatio="none" viewBox="0 0 400 200">
-                 <path d="M-50,200 L50,150 L150,170 L250,100 L350,20 L450,200 Z" fill="#4ade80" stroke="#16a34a" strokeWidth="3" />
-                 <path d="M-50,210 L50,160 L150,180 L250,110 L350,30 L450,210 Z" fill="#22c55e" opacity="0.5" />
-                 <path d="M40,150 Q100,180 150,150 T280,80 T350,20" fill="none" stroke="white" strokeWidth="4" strokeDasharray="8,8" opacity="0.8" />
-                 <g transform="translate(350, 20)">
-                   <line x1="0" y1="0" x2="0" y2="-20" stroke="brown" strokeWidth="2" />
-                   <polygon points="0,-20 15,-15 0,-10" fill="red" />
-                 </g>
-              </svg>
-              <div className="absolute text-5xl transition-all duration-[2000ms] ease-in-out transform -translate-x-1/2 translate-y-1/2" style={{ left: `${charPos.left}%`, bottom: `${charPos.bottom}%`, animation: 'bounceMove 2s infinite' }}>{buddy.icon}</div>
-              <div className="absolute transition-all duration-[2000ms] ease-in-out transform -translate-x-1/2" style={{ left: `${charPos.left}%`, bottom: `${charPos.bottom + 12}%`, }}>
-                <span className="bg-white/90 px-2 py-1 rounded text-xs font-bold text-blue-600 shadow-sm whitespace-nowrap">現在 Lv.{currentUser.level}</span>
-              </div>
-            </div>
-            <div className="z-20 mb-12 w-full max-w-xs px-4 animate-pulse">
-              <button 
-                onClick={() => {
-                  setShowLevelUpAnim(false);
-                  setTurnCount(prev => prev + 1);
-                  generateProblem(turnCount + 1);
-                }} 
-                className="w-full bg-gradient-to-r from-orange-400 to-red-500 text-white font-bold py-4 rounded-full shadow-2xl text-xl hover:scale-105 transition transform border-4 border-white"
-              >
-                次の冒険へ！
-              </button>
-            </div>
-          </div>
-        );
-      }
-
-      // --- UIコンポーネント: テーマ選択 (テーマ保存機能追加) ---
-      if (gameState === 'themes') {
-        return (
-          <div className={`min-h-screen ${theme.bg} flex flex-col items-center p-4`}>
-            <div className="w-full max-w-md">
-              <button onClick={() => setGameState('menu')} className="mb-4 bg-white/50 p-2 rounded-full hover:bg-white/80 transition">
-                <X size={24} className={theme.text} />
-              </button>
-              <h2 className={`text-2xl font-bold mb-6 ${theme.text} text-center`}>テーマをえらぼう</h2>
-              <div className="grid gap-4">
-                {THEMES.map((t) => {
-                  const isLocked = currentUser.level < t.minLevel;
-                  const isSelected = currentUser.currentThemeId === t.id;
-                  return (
-                    <button 
-                      key={t.id} 
-                      disabled={isLocked} 
-                      onClick={() => saveUserData({ ...currentUser, currentThemeId: t.id })}
-                      className={`relative p-4 rounded-2xl border-4 transition-all text-left flex items-center gap-4 overflow-hidden ${isSelected ? 'border-blue-500 shadow-xl scale-105' : 'border-transparent shadow-sm'} ${isLocked ? 'bg-gray-200 opacity-70' : 'bg-white hover:bg-gray-50'}`}
-                    >
-                      <div className={`w-16 h-16 rounded-xl ${t.primary} flex items-center justify-center text-white text-2xl shadow-inner`}>
-                        {t.id === 'default' && '🏰'} {t.id === 'forest' && '🌲'} {t.id === 'space' && '🚀'} {t.id === 'gold' && '👑'}
-                      </div>
-                      <div className="flex-1">
-                        <div className="font-bold text-lg text-gray-800">{t.name}</div>
-                        <div className="text-sm text-gray-500">{isLocked ? `Lv.${t.minLevel}で解放` : '使えるよ！'}</div>
-                      </div>
-                      {isLocked ? <Lock className="text-gray-400" /> : isSelected && <div className="absolute right-0 top-0 bg-blue-500 text-white text-xs px-2 py-1 rounded-bl-lg">選択中</div>}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      // --- UIコンポーネント: メニュー画面 ---
-      if (gameState === 'menu') {
-        return (
-          <div className={`min-h-screen ${theme.bg} ${theme.text} flex flex-col items-center justify-center p-4 transition-colors duration-500 relative`}>
-            {/* ユーザー切り替えボタン */}
-            <button 
-              onClick={() => {
-                setCurrentUser(null);
-                setGameState('user_select');
-              }}
-              className="absolute top-4 left-4 bg-white/50 p-2 rounded-xl text-sm font-bold flex items-center gap-1 hover:bg-white"
-            >
-              <User size={16} /> ユーザー切替
-            </button>
-
-            <div className="bg-white/80 p-8 rounded-3xl shadow-xl text-center max-w-md w-full backdrop-blur-sm">
-              <div className="text-6xl mb-4 animate-bounce">
-                {buddy.icon}
-              </div>
-              <h1 className="text-4xl font-bold mb-2 tracking-tight text-blue-600">九九クエスト</h1>
-              <p className="text-lg text-gray-600 mb-6">ようこそ、{currentUser.name}！</p>
-              <div className="space-y-4">
-                 <div className="bg-white p-4 rounded-xl border-2 border-blue-100">
-                   <div className="text-sm text-gray-500">現在のレベル</div>
-                   <div className="text-3xl font-bold text-blue-600">Lv.{currentUser.level}</div>
-                   <div className="text-sm font-bold text-orange-500 mt-1">{getCurrentTitle(currentUser.level)}</div>
-                 </div>
-                 
-                 <button onClick={startGame} className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-4 px-6 rounded-2xl shadow-lg transform transition active:scale-95 text-xl flex items-center justify-center gap-2">
-                   <Zap size={24} fill="currentColor" /> 冒険に出る
-                 </button>
-
-                 <div className="flex gap-4">
-                    <button onClick={() => setGameState('calendar')} className="flex-1 bg-pink-500 hover:bg-pink-600 text-white font-bold py-3 px-4 rounded-2xl shadow-md transform transition active:scale-95 flex items-center justify-center gap-2">
-                      <Calendar size={20} /> カレンダー
-                    </button>
-                    <button onClick={() => setGameState('themes')} className="flex-1 bg-teal-500 hover:bg-teal-600 text-white font-bold py-3 px-4 rounded-2xl shadow-md transform transition active:scale-95 flex items-center justify-center gap-2">
-                      <Settings size={20} /> きせかえ
-                    </button>
-                 </div>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      // --- UIコンポーネント: 結果画面 ---
-      if (gameState === 'summary') {
-        // 簡易的にミス分析関数をここに再定義
-        const counts = {};
-        mistakeHistory.forEach(m => { counts[m.num1] = (counts[m.num1] || 0) + 1; });
-        const mistakes = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([num, count]) => ({ num, count }));
-
-        return (
-          <div className={`min-h-screen ${theme.bg} ${theme.text} flex flex-col items-center justify-center p-4`}>
-            <div className="bg-white/90 p-8 rounded-3xl shadow-xl text-center max-w-md w-full backdrop-blur-sm animate-fade-in-up">
-              <Trophy size={64} className="mx-auto text-yellow-500 mb-4" />
-              <h2 className="text-3xl font-bold mb-2">おつかれさま！</h2>
-              <p className="text-gray-600 mb-8">きょうの冒険がおわったよ</p>
-              <div className="bg-white p-6 rounded-2xl border-2 border-gray-100 mb-8 text-left">
-                <h3 className="font-bold text-lg mb-4 flex items-center gap-2 border-b pb-2"><BarChart3 className="text-blue-500" /> きょうの分析</h3>
-                {mistakes.length === 0 ? (
-                  <div className="text-center py-4">
-                    <p className="text-xl font-bold text-orange-500 mb-1">パーフェクト！</p>
-                    <p className="text-sm text-gray-500">ミスなしですごい！このちょうし！</p>
-                  </div>
-                ) : (
-                  <div>
-                    <p className="text-sm text-gray-500 mb-3">この段を復習してみよう！</p>
-                    <div className="space-y-3">
-                      {mistakes.map((item, idx) => (
-                        <div key={item.num} className="flex items-center justify-between bg-red-50 p-3 rounded-lg">
-                          <div className="flex items-center gap-3">
-                            <span className="bg-red-200 text-red-700 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">{idx + 1}</span>
-                            <span className="font-bold text-lg text-gray-800">{item.num}の段</span>
-                          </div>
-                          <span className="text-red-500 font-bold">{item.count}回ミス</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-4">
-                <button onClick={() => setGameState('menu')} className="flex-1 bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 px-4 rounded-xl shadow-md">タイトルへ</button>
-                <button onClick={startGame} className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-4 rounded-xl shadow-md flex items-center justify-center gap-2"><RefreshCcw size={18} /> もう一度</button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      // --- UIコンポーネント: ゲーム画面 ---
-      return (
-        <div className={`min-h-screen ${theme.bg} ${theme.text} flex flex-col items-center justify-between p-4 overflow-hidden relative transition-colors duration-500`}>
-          {/* 10分達成モーダル */}
-          {showDailyGoalModal && (
-            <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in-up">
-               <div className="bg-white p-8 rounded-3xl shadow-2xl text-center max-w-sm w-full relative overflow-hidden">
-                 <div className="absolute top-0 left-0 w-full h-4 bg-gradient-to-r from-pink-400 to-yellow-400"></div>
-                 <div className="text-6xl mb-4 animate-bounce">💮</div>
-                 <h2 className="text-2xl font-bold mb-2 text-pink-600">今日もがんばったね！</h2>
-                 <p className="text-gray-600 mb-6 font-bold">
-                   10分間 勉強しました！<br/>
-                   カレンダーにスタンプを押したよ！
-                 </p>
-                 <button 
-                   onClick={() => setShowDailyGoalModal(false)}
-                   className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 rounded-xl shadow-lg"
-                 >
-                   ありがとう！
-                 </button>
-               </div>
-            </div>
-          )}
-
-          {confetti && (
-            <div className="absolute inset-0 pointer-events-none flex items-center justify-center overflow-hidden z-40">
-              <div className="animate-ping absolute w-full h-full bg-yellow-200/30"></div>
-              <div className="text-6xl animate-bounce">🎊</div>
-            </div>
-          )}
-
-          {/* ヘッダー */}
-          <div className="w-full max-w-md flex justify-between items-center bg-white/60 p-2 rounded-full backdrop-blur-sm z-10">
-            <button onClick={() => setGameState('summary')} className="bg-red-500 hover:bg-red-600 text-white text-xs font-bold py-2 px-4 rounded-full flex items-center gap-1 shadow-sm transition">
-              <LogOut size={14} /> おわり
-            </button>
-            <div className="flex flex-col items-center flex-1 px-4">
-              <span className="text-xs font-bold opacity-70">Lv.{currentUser.level} {getCurrentTitle(currentUser.level)}</span>
-              <div className="w-full max-w-[120px] h-3 bg-gray-200 rounded-full overflow-hidden mt-1 border border-black/10">
-                <div className={`h-full ${theme.primary} transition-all duration-500 ease-out`} style={{ width: `${progress}%` }}></div>
-              </div>
-            </div>
+    # 1. 在庫消化ボーナス (在庫にある食材を使うほど高得点)
+    match_count = sum(1 for item in recipe['ingredients'] if item in current_inventory)
+    score += match_count * 20 
+    
+    # 2. 味の好み
+    score += recipe['taste'] * 10
+    
+    # 3. 手間と曜日のマッチング
+    if not is_weekend: # 平日
+        if recipe['effort'] == "楽ちん":
+            score += 30
+        elif recipe['effort'] == "手間":
+            score -= 50 # 平日に手間のかかる料理は避ける
+    else: # 休日
+        if recipe['effort'] == "手間":
+            score += 10 # 休日は少し凝ったものでもOK
+        if recipe['cost'] == "贅沢":
+            score += 20 # 休日は贅沢OK
             
-            {/* タイマー表示 (10分ゲージ) */}
-            <div className="flex items-center gap-2 px-3">
-               <div className="w-8 h-8 relative flex items-center justify-center">
-                 <Clock size={20} className="text-blue-500 absolute" />
-                 <svg className="w-full h-full absolute -rotate-90">
-                   <circle cx="16" cy="16" r="14" fill="none" stroke="#e5e7eb" strokeWidth="3" />
-                   <circle 
-                     cx="16" cy="16" r="14" fill="none" stroke="#3b82f6" strokeWidth="3" 
-                     strokeDasharray="88" 
-                     strokeDashoffset={88 - (88 * Math.min(1, dailyPlaySeconds / DAILY_GOAL_SECONDS))} 
-                     className="transition-all duration-1000 linear"
-                   />
-                 </svg>
-               </div>
-            </div>
-          </div>
+    # 4. 頻度制御 (簡易版)
+    if recipe['frequency'] == "二度と提案しない":
+        score = -999
+        
+    return score
 
-          {/* メインエリア */}
-          <div className="flex-1 w-full max-w-md flex flex-col items-center justify-center gap-2 relative">
-            <div className={`h-8 transition-all duration-300 ${combo >= 2 ? 'opacity-100 scale-100' : 'opacity-0 scale-50'}`}>
-              <div className="bg-orange-500 text-white px-4 py-1 rounded-full font-bold shadow-lg animate-pulse flex items-center gap-2">
-                <Zap size={16} fill="currentColor" /> {combo} コンボ！
-              </div>
-            </div>
-            <div className="w-full flex justify-between items-end px-4 mb-2 h-32 relative">
-               <div className={`text-7xl filter drop-shadow-xl transition-transform duration-300 ${shake ? 'translate-x-[-10px]' : ''}`}>
-                 {buddy.icon}
-               </div>
-               <div className="text-2xl font-black text-gray-400 opacity-50 absolute left-1/2 bottom-8 -translate-x-1/2 italic">VS</div>
-               <div className={`flex flex-col items-center transition-all duration-300 ${message?.type === 'correct' ? 'opacity-0 scale-50 translate-x-10' : 'opacity-100 scale-100'}`}>
-                  <div className="bg-gray-800 text-white text-[10px] px-2 py-0.5 rounded-full mb-1">
-                    {problem.difficulty === 1 ? "かんたん" : problem.difficulty === 2 ? "ふつう" : "強敵！"}
-                  </div>
-                  <div className="text-7xl filter drop-shadow-xl transform scale-x-[-1]">{currentEnemy.icon}</div>
-                  <div className="text-sm font-bold bg-white/50 px-2 rounded-full mt-1">{currentEnemy.name}</div>
-               </div>
-               {message && (
-                 <div className={`absolute -top-10 left-1/2 transform -translate-x-1/2 w-[95%] px-4 py-3 rounded-2xl shadow-xl font-bold text-lg z-20 border-4 border-white animate-bounce-slight text-center leading-tight ${message.type === 'wrong' ? 'bg-red-500 text-white' : message.type === 'levelup' ? 'bg-yellow-400 text-white' : message.type === 'combo' ? 'bg-orange-500 text-white' : 'bg-white text-blue-600'}`}>
-                   {message.text}
-                 </div>
-               )}
-            </div>
-            <div className={`bg-white rounded-3xl p-6 md:p-8 shadow-2xl w-full text-center border-b-8 border-gray-200 relative ${shake ? 'animate-shake' : ''}`}>
-              <div className="text-7xl font-black text-gray-800 tracking-widest flex justify-center items-center gap-2 md:gap-4">
-                <span>{problem.num1}</span><span className="text-4xl text-gray-400">×</span><span>{problem.num2}</span><span className="text-4xl text-gray-400">=</span>
-                <span className={`min-w-[80px] border-b-4 ${userAnswer ? 'border-gray-800' : 'border-gray-200'} text-blue-600`}>{userAnswer || '?'}</span>
-              </div>
-            </div>
-          </div>
+def generate_menu():
+    """1週間分の献立を生成する"""
+    days = ["月", "火", "水", "木", "金", "土", "日"]
+    inventory = get_inventory_list()
+    menu = {}
+    
+    # レシピリストのコピーを使用
+    available_recipes = st.session_state.recipes.copy()
+    
+    for i, day in enumerate(days):
+        is_weekend = (day in ["土", "日"])
+        
+        # スコアリング
+        for r in available_recipes:
+            r['score'] = calculate_score(r, inventory, is_weekend)
+            
+        # スコア順にソートして、上位からランダム性を持たせて選択
+        available_recipes.sort(key=lambda x: x['score'], reverse=True)
+        
+        # 上位3つからランダムに選ぶ（毎回同じにならないように）
+        if available_recipes:
+            candidates = available_recipes[:3]
+            selected = random.choice(candidates)
+            menu[day] = selected
+            
+            # 選ばれたレシピはリストから外す（1週間で重複しないようにする場合）
+            # 重複OKならこの行をコメントアウト
+            available_recipes.remove(selected) 
+    
+    st.session_state.weekly_menu = menu
 
-          {/* テンキー */}
-          <div className="w-full max-w-md bg-white/40 p-4 rounded-3xl backdrop-blur-md">
-            <div className="grid grid-cols-3 gap-3">
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 0].map((num) => (
-                <button key={num} onClick={() => handleNumClick(num.toString())} className={`bg-white shadow-[0_4px_0_0_rgba(0,0,0,0.1)] active:shadow-none active:translate-y-[4px] h-14 md:h-16 rounded-2xl text-3xl font-bold ${theme.text} hover:bg-gray-50 transition-all ${num === 0 ? 'col-span-1' : ''}`}>{num}</button>
-              ))}
-              <button onClick={handleBackspace} className="bg-gray-200 h-14 md:h-16 rounded-2xl text-xl font-bold text-gray-600 flex items-center justify-center shadow-[0_4px_0_0_rgba(0,0,0,0.1)] active:translate-y-[4px] active:shadow-none">けす</button>
-              <button onClick={checkAnswer} disabled={userAnswer === ''} className={`h-14 md:h-16 rounded-2xl text-xl font-bold text-white flex items-center justify-center shadow-[0_4px_0_0_rgba(0,0,0,0.2)] transition-all ${userAnswer === '' ? 'bg-gray-300 cursor-not-allowed' : `${theme.primary} active:translate-y-[4px] active:shadow-none`}`}>決定</button>
-            </div>
-          </div>
-        </div>
-      );
-    }
+# --- UI構築 ---
 
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<KukuQuest />);
-  </script>
-</body>
-</html>
+st.title("🍳 AI献立プランナー")
+
+# タブの作成
+tab1, tab2, tab3, tab4 = st.tabs(["🏠 冷蔵庫管理", "📅 1週間献立", "🛒 買い物リスト", "📝 レシピ登録"])
+
+# --- Tab 1: 冷蔵庫管理 ---
+with tab1:
+    st.header("現在の冷蔵庫の中身")
+    st.caption("あるものだけチェック（✅）を入れてください")
+    
+    # データフレームエディタでON/OFF切り替え
+    edited_df = st.data_editor(
+        st.session_state.inventory,
+        column_config={
+            "在庫あり": st.column_config.CheckboxColumn(
+                "在庫スイッチ",
+                help="冷蔵庫にある場合はチェック",
+                default=False,
+            )
+        },
+        disabled=["食材名", "カテゴリ"],
+        hide_index=True,
+        use_container_width=True
+    )
+    
+    # 変更を保存
+    if not edited_df.equals(st.session_state.inventory):
+        st.session_state.inventory = edited_df
+        st.success("在庫情報を更新しました！")
+
+# --- Tab 2: 1週間献立 ---
+with tab2:
+    st.header("今週の提案メニュー")
+    
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        if st.button("🔄 献立を生成する", type="primary"):
+            generate_menu()
+            st.success("作成しました！")
+    
+    if st.session_state.weekly_menu:
+        for day, recipe in st.session_state.weekly_menu.items():
+            with st.container():
+                st.markdown(f"### {day}曜日： {recipe['name']}")
+                
+                # 詳細情報の表示
+                c1, c2, c3, c4 = st.columns(4)
+                c1.write(f"❤️ 味: {'★'*recipe['taste']}")
+                c2.write(f"🔪 手間: {recipe['effort']}")
+                c3.write(f"💰 コスト: {recipe['cost']}")
+                
+                # 食材マッチング表示
+                stock_items = get_inventory_list()
+                ingredients_display = []
+                for ing in recipe['ingredients']:
+                    if ing in stock_items:
+                        ingredients_display.append(f"✅{ing}") # 在庫あり
+                    else:
+                        ingredients_display.append(f"❌{ing}") # 在庫なし
+                
+                st.write(f"食材: {', '.join(ingredients_display)}")
+                st.divider()
+    else:
+        st.info("ボタンを押して献立を作成してください。")
+
+# --- Tab 3: 買い物リスト ---
+with tab3:
+    st.header("必要な買い物リスト")
+    
+    if st.session_state.weekly_menu:
+        needed_ingredients = {} # {食材名: 回数}
+        stock_items = get_inventory_list()
+        
+        # 集計
+        for day, recipe in st.session_state.weekly_menu.items():
+            for ing in recipe['ingredients']:
+                if ing not in stock_items:
+                    if ing in needed_ingredients:
+                        needed_ingredients[ing]['count'] += 1
+                        needed_ingredients[ing]['days'].append(day)
+                    else:
+                        needed_ingredients[ing] = {'count': 1, 'days': [day]}
+        
+        if needed_ingredients:
+            st.write("在庫になく、今週必要な食材です：")
+            
+            shop_data = []
+            for name, info in needed_ingredients.items():
+                shop_data.append({
+                    "買うもの": name,
+                    "必要回数": f"{info['count']}回",
+                    "使う曜日": ", ".join(info['days'])
+                })
+            
+            st.table(pd.DataFrame(shop_data))
+            
+            if st.button("買い物を完了する（在庫に追加）"):
+                # 買い物リストにあるものをすべて在庫ONにする処理
+                for index, row in st.session_state.inventory.iterrows():
+                    if row['食材名'] in needed_ingredients:
+                        st.session_state.inventory.at[index, '在庫あり'] = True
+                st.experimental_rerun()
+                
+        else:
+            st.success("買い物は不要です！すべての食材が揃っています。")
+    else:
+        st.warning("まずは「1週間献立」を作成してください。")
+
+# --- Tab 4: レシピ登録 ---
+with tab4:
+    st.header("新しいレシピの登録")
+    
+    with st.form("recipe_form"):
+        new_name = st.text_input("料理名")
+        new_ings = st.text_input("材料（カンマ区切りで入力）", placeholder="豚肉, キャベツ, 卵")
+        
+        c1, c2 = st.columns(2)
+        new_taste = c1.slider("味の評価", 1, 5, 3)
+        new_effort = c2.selectbox("手間", ["楽ちん", "普通", "手間"])
+        
+        c3, c4 = st.columns(2)
+        new_cost = c3.selectbox("価格感", ["節約", "普通", "贅沢"])
+        new_freq = c4.selectbox("頻度", ["週1回以上", "月2-3回", "月1回", "3ヶ月に1回", "二度と提案しない"])
+        
+        submitted = st.form_submit_button("登録する")
+        
+        if submitted and new_name and new_ings:
+            ing_list = [x.strip() for x in new_ings.split(",")]
+            new_recipe = {
+                "name": new_name,
+                "ingredients": ing_list,
+                "taste": new_taste,
+                "effort": new_effort,
+                "cost": new_cost,
+                "frequency": new_freq,
+                "last_eaten": None
+            }
+            st.session_state.recipes.append(new_recipe)
+            st.success(f"{new_name} を登録しました！")
+            
+    st.subheader("登録済みレシピ一覧")
+    st.json(st.session_state.recipes)
